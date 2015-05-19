@@ -40,8 +40,17 @@
 #include <getopt.h>
 #include <string>
 #include <algorithm>
+#include <cstdlib>
 
+#define cimg_use_ffmpeg
 #include "perspectiveTransform.hpp"
+
+typedef struct video_pb {
+  const char *filename;
+  unsigned int fps;
+  const char *codec;
+  unsigned int bitrate;
+} video_pb;
 
 // corner index
 const int topL=0,topR=1,botL=2,botR=3;
@@ -157,11 +166,20 @@ int getMaskCorners(CImg<unsigned char> &output_mask,ptPoint *corners) {
 
 } // getMaskCorners
 
-int videoToQuad(std::string &video_in, std::string &mask, std::string &video_out) {
+std::string leadingZeros(int n, int value) {
+  std::string s=std::to_string(value);
+  s.insert(0,n-s.length(),'0');
+  return s;
+}
 
+long frame_begin=-1;
+long frame_end=-1;
+long frame_step=1;
+
+int videoToQuad(std::string &video_in, std::string &mask, video_pb *video_out,std::string &output_folder) {
+    
   CImgList<unsigned char> input_frames;
   CImg<unsigned char> output_mask(mask.c_str());
-
   ptPoint mask_corners[4];
 
   if (getMaskCorners(output_mask,mask_corners)) {
@@ -170,19 +188,39 @@ int videoToQuad(std::string &video_in, std::string &mask, std::string &video_out
   }
 
   fprintf(stderr,"info: loading %s\n",video_in.c_str());
-  input_frames.load_ffmpeg_external(video_in.c_str());
 
-  fprintf(stderr,"info: resolution %dx%d, %d frames\n",input_frames.begin()->width(),input_frames.begin()->height(),input_frames.begin()->depth());
+  if (frame_begin==-1) frame_begin=0;
+  if (frame_end==-1) frame_end=0;
+  input_frames.load_ffmpeg(video_in.c_str(),frame_begin,frame_end,frame_step);
+
+  fprintf(stderr,"info: resolution %dx%d, %d frames\n\n",input_frames.begin()->width(),input_frames.begin()->height(),input_frames.size());
 
   double *H=getPerspectiveTransform(mask_corners);
 
+  CImgList<unsigned char> output_frames;
+  int count=0;
+
   for (CImgList<unsigned char>::iterator frame=input_frames.begin(); frame<input_frames.end(); ++frame) {
-    frame+=600;
-    inversePerspectiveTransformImage(frame,&output_mask,NULL,H,true);
-    output_mask.save("voila.png");
-    frame->save("full.png");
-    exit(0);
+    CImg<unsigned char> output_frame(output_mask);
+    fprintf(stderr,"\rinfo: processing frame %d ",count*frame_step+frame_begin);
+    inversePerspectiveTransformImage(frame,&output_frame,NULL,H,true);
+    if (video_out->filename) {
+      output_frames.push_back(output_frame);
+    } else {
+      std::string output_filename=output_folder+"/"+leadingZeros(6,count*frame_step+frame_begin)+".png";
+      output_frame.save(output_filename.c_str());
+    }
+    ++count;
   }
+
+  input_frames=NULL;
+
+  if (video_out->filename) {
+    fprintf(stderr,"info: saving result to %s\n",video_out->filename);
+    output_frames.save_ffmpeg_external(video_out->filename,video_out->codec,video_out->fps,video_out->bitrate);
+  }
+
+  return 0;
 
 } // videoToQuad
 
@@ -193,20 +231,33 @@ int main(int argc, char **argv) {
 
    std::string video_in;
    std::string mask;
-   std::string video_out;
+   video_pb video_out;
+   std::string output_folder;
 
+   video_out.filename=0;
+   video_out.codec=0;
+   video_out.bitrate=2048;
+   video_out.fps=25;
+   
    while (1) {
        int this_option_optind = optind ? optind : 1;
        int option_index = 0;
        static struct option long_options[] = {
-           {"video-in",   required_argument, 0,  'i' },
-           {"mask",       no_argument,       0,  'm' },
-           {"video-out",  required_argument, 0,  'o' },
-           {"help",       no_argument,       0,  'h' },
-           {0,            0,                 0,  0 }
+           {"video-in",       required_argument, 0,  'i' },
+           {"mask",           required_argument, 0,  'm' },
+           {"target-folder",  required_argument, 0,  't' },
+           {"video-out",      required_argument, 0,  'o' },
+           {"help",           no_argument,       0,  'h' },
+           {"codec",          required_argument, 0,  'c' },
+           {"bitrate",        required_argument, 0,  'b' },
+           {"fps",            required_argument, 0,  'f' },
+           {"frame-begin",    required_argument, 0,  'B' },
+           {"frame-end",      required_argument, 0,  'E' },
+           {"frame-step",     required_argument, 0,  'S' },
+           {0,                0,                 0,   0  }
        };
 
-       c = getopt_long(argc, argv, "i:m:o:h",
+       c = getopt_long(argc, argv, "i:m:o:hc:b:f:t:B:E:S:",
                 long_options, &option_index);
        if (c == -1)
            break;
@@ -221,11 +272,39 @@ int main(int argc, char **argv) {
            break;
 
        case 'o':
-           video_out=std::string(optarg);
+           video_out.filename=std::string(optarg).c_str();
+           break;
+
+       case 'c':
+           video_out.codec=std::string(optarg).c_str();
+           break;
+
+       case 'b':
+           video_out.bitrate=atoi(optarg);
+           break;
+
+       case 'f':
+           video_out.fps=atoi(optarg);
+           break;
+
+       case 't':
+           output_folder=std::string(optarg);
            break;
 
        case 'h':
            usage(argv[0]);
+           break;
+
+       case 'B':
+           frame_begin=atoi(optarg);
+           break;
+
+       case 'E':
+           frame_end=atoi(optarg);
+           break;
+
+       case 'S':
+           frame_step=atoi(optarg);
            break;
 
        case '?':
@@ -244,11 +323,12 @@ int main(int argc, char **argv) {
        usage(argv[0]);
    }
 
-   if (optind != 7) {
-     usage(argv[0]);
+   if ((!video_out.filename && !output_folder.length()) || (video_out.filename && output_folder.length())) {
+     fprintf(stderr,"\nerror: You must specify --video-out OR --target-folder\n\n");
+     exit(1);
    }
 
-   return videoToQuad(video_in,mask,video_out);
+   return videoToQuad(video_in,mask,&video_out,output_folder);
 
 } // main
 

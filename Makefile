@@ -1,12 +1,13 @@
 PREFIX?=/usr/local
 
-all: perspectiveTransform videoToQuad
+all: videoToQuad
 
-videoToQuad: videoToQuad.cpp perspectiveTransform/perspectiveTransform.o
-	g++ -g videoToQuad.cpp -I./perspectiveTransform perspectiveTransform/perspectiveTransform.o -o videoToQuad -ltiff -lpthread
+videoToQuad: Makefile videoToQuad.cpp perspectiveTransform/perspectiveTransform.o
+	g++ -std=c++11 -g videoToQuad.cpp -I./perspectiveTransform perspectiveTransform/perspectiveTransform.o -o videoToQuad -ltiff -lpthread -lavcodec -lavformat -lswscale -lavutil -lz
 
 clean:
-	rm *.o videoToQuad
+	${MAKE} PREFIX=${PREFIX} -C perspectiveTransform clean
+	rm videoToQuad
 
 install: 
 	install %D videoToQuad ${PREFIX}/bin
@@ -15,4 +16,4 @@ uninstall:
 	rm ${PREFIX}/bin/videoToQuad
 
 
-.PHONY: all perspectiveTransform clean
+.PHONY: all clean install uninstall
